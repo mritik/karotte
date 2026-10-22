@@ -60,6 +60,7 @@ class _EchoAgent(CliAgent):
     after_output: str = ""
     exit_code: int = 0
     held: str = ""
+    reported: str | None = None
 
     @classmethod
     def install(cls) -> list[str]:
@@ -102,6 +103,9 @@ class _EchoAgent(CliAgent):
             yield MessageAddedEvent(
                 message=Message(role="assistant", content=self.held)
             )
+
+    def _reported_error(self) -> str | None:
+        return self.reported
 
 
 def _agent(
@@ -226,6 +230,24 @@ class TestForwarder:
         assert agent.model_url == "http://proxy:4000"
 
     @pytest.mark.asyncio
+    async def test_a_proxy_via_the_forwarder_keeps_the_key_from_the_cli(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        agent = _agent(tmp_path, monkeypatch)
+        monkeypatch.setattr(_EchoAgent, "proxy_via_forwarder", True)
+        monkeypatch.setenv("KAROTTE_PROXY_URL", "http://proxy:4000/")
+        await agent.start(MagicMock())
+        try:
+            forwarder = agent._forwarder  # pyright: ignore[reportPrivateUsage]
+            assert forwarder is not None
+            assert forwarder.upstream == "http://proxy:4000"
+            assert agent.model_url == forwarder.url
+            env = agent._env()  # pyright: ignore[reportPrivateUsage]
+            assert env["ECHO_API_KEY"] == PROXY_PLACEHOLDER_KEY
+        finally:
+            await agent.stop()
+
+    @pytest.mark.asyncio
     async def test_the_forwarder_is_made_off_the_event_loop(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -281,6 +303,20 @@ class TestRunStep:
             async for event in agent.run_step("hi"):
                 seen.append(event)
         assert _contents(seen) == ["0:hi"]
+
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_quotes_the_clis_own_error_over_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        agent = _agent(tmp_path, monkeypatch)
+        agent.exit_code = 1
+        agent.reported = "API Error: 400 bad request"
+        (tmp_path / ".echo" / "gate").touch()
+        with pytest.raises(CliAgentExitedError) as raised:
+            _ = [e async for e in agent.run_step("hi")]
+        assert (
+            str(raised.value) == "echo exited 1 on step 0: API Error: 400 bad request"
+        )
 
     @pytest.mark.asyncio
     async def test_time_limit_score_keeps_output_so_far(
