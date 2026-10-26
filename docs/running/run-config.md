@@ -147,6 +147,17 @@ Providers don't agree on what the levels are called or how many there are, so Ka
 The run config is rejected if it's set for the `external` agent, for a CLI agent that can't send one, or for a model that takes no temperature, such as Claude Opus 5.
 Unset, Karotte sends none and the agent or provider picks.
 
+## Reasoning history
+
+A self-hosted model (`hosted_vllm/...`) is sent the reasoning of its earlier turns, as Claude, OpenAI and xAI models are sent theirs.
+Whether the model sees it is up to its chat template.
+litellm's `hosted_vllm` route removes the reasoning from every assistant message, so the builtin agent calls the same server through litellm's generic OpenAI-compatible route instead.
+The run needs `--proxy` pointing at the server, or litellm's `HOSTED_VLLM_API_BASE`.
+
+The reasoning fills the context window faster.
+When the server refuses a request because the window is full, Karotte leaves out the reasoning of every turn so far, retries, and goes on sending the reasoning of later turns.
+If the request still doesn't fit, the run fails.
+
 ## Limits
 
 Use these fields to limit how much work the student can do:
@@ -279,6 +290,8 @@ CLI agents differ from `builtin` in a few ways:
 - On an Anthropic model, the transcript's reasoning is Anthropic's summary of the model's thinking; the raw thinking isn't available.
 - On a `hosted_vllm` model, Claude Code doesn't ask for thinking, since SGLang refuses that request from a server without a reasoning parser.
   Whether the model thinks is up to its chat template; a Qwen3.5+ model thinks by default.
+- On a `hosted_vllm` model, Claude Code doesn't send a reasoning effort either.
+  SGLang hands it to the model's chat template, and some templates refuse efforts they don't define (Qwen3.8 takes only `xhigh`, `medium` and `low`), so the template's own default applies.
 
 `codex` specifics:
 
